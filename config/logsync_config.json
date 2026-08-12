@@ -1,0 +1,22 @@
+"""Custom parser definitions for LogSync."""
+{
+  "parsers": [
+    {
+      "name": "custom_format_1",
+      "pattern": "^\\[(?P<timestamp>[^\\]]+)\\] \\[(?P<level>[\\w]+)\\] (?P<source>\\S+): (?P<message>.*)$",
+      "timestamp_format": "%Y-%m-%d %H:%M:%S",
+      "source_field": "source",
+      "level_field": "level",
+      "message_field": "message"
+    },
+    {
+      "name": "my_app_log",
+      "pattern": "^(?P<timestamp>\\d{4}-\\d{2}-\\d{2}\\s+\\d{2}:\\d{2}:\\d{2})\\s+(?P<level>INFO|WARN|ERROR)\\s+-\\s+(?P<message>.*)$",
+      "timestamp_format": "%Y-%m-%d %H:%M:%S",
+      "source_field": "my_app",
+      "level_field": "level",
+      "message_field": "message"
+    }
+  ],
+  "auto_detect_order": ["json", "syslog", "apache", "python_log", "windows_event"]
+}
