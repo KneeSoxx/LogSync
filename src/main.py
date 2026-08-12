@@ -1,15 +1,16 @@
 """FastAPI application entry point."""
 import os
+import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
-from fastapi import FastAPI, UploadFile, File, HTTPException, Query, Request
+from fastapi import FastAPI, UploadFile, File, HTTPException, Query, Request, Form
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
-from src.models import LogEntry, LogFile, ParserDefinition, ParserRegistry, get_registry, reset_registry
+from src.models import LogEntry, LogFile, LogStream, ParserDefinition, ParserRegistry, get_registry, reset_registry
 from src.storage.file_manager import store_log_file, get_log_file_info, remove_log_file, count_lines, get_temp_log_dir
-from src.processors.parser_registry import ParserRegistry
+from src.processors.parser_registry import ParserRegistry as GlobalParserRegistry
 
 
 # Initialize FastAPI app
@@ -27,6 +28,17 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Helper functions
+def create_log_file_id() -> str:
+    """Generate unique ID for log files."""
+    return str(uuid.uuid4())[:8]
+
+
+def create_stream_id() -> str:
+    """Generate unique ID for log streams."""
+    return str(uuid.uuid4())[:8]
+
 
 # Initialize parser registry
 CONFIG_PATH = Path(__file__).parent.parent / "config" / "logsync_config.json"
@@ -65,15 +77,23 @@ async def health_check():
 # ==================== Log File Management ====================
 
 @app.post("/api/logs", tags=["Logs"])
-async def upload_logs(files: List[UploadFile] = File(...)):
+async def upload_logs(
+    files: List[UploadFile] = File(...),
+    stream_id: str = Form(None),  # Optional stream ID to link files together
+):
     """
     Upload one or more log files.
     
     - Accepts multiple files via multipart form
     - Auto-detects format for each file
-    - Returns metadata including detected format
+    - Can optionally link files as a single stream using stream_id
+    
+    Returns metadata including detected format and stream association (if applicable)
     """
     stored_files = []
+    
+    # Generate or use provided stream ID
+    effective_stream_id = stream_id if stream_id else create_stream_id()
     
     for file in files:
         try:
@@ -100,7 +120,8 @@ async def upload_logs(files: List[UploadFile] = File(...)):
                 filepath=str(filepath),
                 size_bytes=await file.seek(0, 2),  # Get file size
                 line_count=line_count,
-                detected_format=detected_format
+                detected_format=detected_format,
+                stream_id=effective_stream_id if len(files) > 1 else None  # Only link if multiple files
             )
             
             stored_files.append(log_file)
@@ -108,25 +129,34 @@ async def upload_logs(files: List[UploadFile] = File(...)):
         except Exception as e:
             raise HTTPException(status_code=400, detail=f"Error processing {file.filename}: {str(e)}")
     
-    return {"uploaded": len(stored_files), "files": [model.model_dump() for model in stored_files]}
+    return {
+        "uploaded": len(stored_files), 
+        "files": [model.model_dump() for model in stored_files],
+        "stream_id": effective_stream_id if len(files) > 1 else None
+    }
 
 
 @app.get("/api/logs", tags=["Logs"])
 async def list_logs():
-    """List all uploaded log files."""
+    """List all uploaded log files with stream association."""
     log_dir = get_temp_log_dir()
     
     if not log_dir.exists():
         return []
     
-    logs = []
+    # Build a map of stream_id -> list of file IDs
+    streams_map: dict[str, set[str]] = {}
+    
     for filepath in log_dir.glob("*.log"):
         try:
-            file_info = get_log_file_info(filepath)
+            filename = filepath.name
+            
+            # Extract ID from filename (format: {id}.log)
+            file_id = filename.replace('.log', '')
             
             # Try to detect format again (in case file changed)
             detected_format = None
-            if file_info['exists'] and file_info['size_bytes'] > 0:
+            if os.path.exists(filepath) and os.path.getsize(filepath) > 0:
                 with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
                     for _ in range(5):
                         line = f.readline().strip()
@@ -134,15 +164,32 @@ async def list_logs():
                             detected_format = parser_registry.detect_format(line)
                             break
             
+            # Check if this file belongs to a stream (has stream_id prefix)
+            stream_id = None
+            if len(file_id) >= 8 and '.' not in file_id:
+                # Try to find the stream ID from the filename pattern
+                for sid, files_in_stream in streams_map.items():
+                    if file_id.startswith(sid):
+                        stream_id = sid
+                        break
+            
             log_entry = LogFile(
-                id=create_log_file_id(),  # Generate ID on retrieval
-                filename=file_info['filename'],
+                id=file_id,  # Use extracted ID
+                filename=filename,
                 filepath=str(filepath),
-                size_bytes=file_info['size_bytes'],
-                line_count=count_lines(filepath),
-                detected_format=detected_format
+                size_bytes=os.path.getsize(filepath) if os.path.exists(filepath) else 0,
+                line_count=count_lines(filepath) if os.path.exists(filepath) else 0,
+                detected_format=detected_format,
+                stream_id=stream_id
             )
             logs.append(log_entry)
+            
+            # Track which stream this file belongs to
+            if stream_id:
+                if stream_id not in streams_map:
+                    streams_map[stream_id] = set()
+                streams_map[stream_id].add(file_id)
+                
         except Exception:
             continue
     
@@ -151,22 +198,118 @@ async def list_logs():
 
 @app.delete("/api/logs/{file_id}", tags=["Logs"])
 async def delete_log(file_id: str):
-    """Delete a log file by ID."""
-    # Find the file (simplified lookup)
+    """Delete a log file by ID (and optionally its stream)."""
+    # Find the file
     log_dir = get_temp_log_dir()
     
+    deleted_files = []
     for filepath in log_dir.glob("*.log"):
         try:
-            if create_log_file_id() == file_id or filepath.name.startswith(file_id):
+            filename = filepath.name
+            
+            # Extract ID from filename
+            extracted_id = filename.replace('.log', '')
+            
+            # Check if this matches the file_id or is part of its stream
+            if extracted_id == file_id or (len(extracted_id) >= 8 and extracted_id.startswith(file_id)):
                 removed = remove_log_file(filepath)
                 if removed:
-                    return {"deleted": True, "file_id": file_id}
-                else:
-                    return {"deleted": False, "error": "Could not remove file"}
+                    deleted_files.append(filename)
         except Exception:
             continue
     
-    return {"deleted": False, "error": "File not found"}
+    # Delete the stream files if all files in stream are deleted
+    if len(deleted_files) > 0:
+        stream_id = None
+        for filename in deleted_files:
+            file_id_part = filename.replace('.log', '')
+            if len(file_id_part) >= 8 and '.' not in file_id_part:
+                # Try to find parent stream ID
+                for i in range(1, 4):
+                    potential_stream = file_id_part[:len(file_id_part)-i]
+                    if potential_stream and all(f.replace('.log', '').startswith(potential_stream) for f in deleted_files):
+                        stream_id = potential_stream
+                        break
+        
+        if stream_id:
+            # Delete any remaining files that belong to this stream
+            stream_dir = log_dir / stream_id
+            if stream_dir.exists():
+                for sf in stream_dir.glob("*.log"):
+                    try:
+                        remove_log_file(sf)
+                    except Exception:
+                        pass
+    
+    return {"deleted": True, "files_deleted": len(deleted_files)}
+
+
+@app.get("/api/streams", tags=["Streams"])
+async def list_streams():
+    """List all log streams and their member files."""
+    log_dir = get_temp_log_dir()
+    
+    if not log_dir.exists():
+        return []
+    
+    streams = []
+    for item in log_dir.iterdir():
+        try:
+            if item.is_dir() and len(item.name) >= 8 and '.' not in item.name:
+                # This is a stream directory
+                files_count = sum(1 for f in item.glob("*.log") if f.exists())
+                
+                stream_info = {
+                    "id": item.name,
+                    "name": item.name,  # Will be updated from content
+                    "file_count": files_count,
+                    "total_lines": 0,
+                    "files": [],
+                    "created_at": datetime.utcnow().isoformat()
+                }
+                
+                for filepath in item.glob("*.log"):
+                    try:
+                        if filepath.exists():
+                            line_count = count_lines(filepath)
+                            stream_info["total_lines"] += line_count
+                            stream_info["files"].append({
+                                "id": filepath.name.replace('.log', ''),
+                                "filename": filepath.name,
+                                "size_bytes": filepath.stat().st_size,
+                                "line_count": line_count
+                            })
+                    except Exception:
+                        continue
+                
+                streams.append(stream_info)
+        except Exception:
+            continue
+    
+    return {"streams": streams}
+
+
+@app.delete("/api/streams/{stream_id}", tags=["Streams"])
+async def delete_stream(stream_id: str):
+    """Delete a log stream and all its files."""
+    log_dir = get_temp_log_dir()
+    
+    try:
+        stream_path = log_dir / stream_id
+        if stream_path.exists() and stream_path.is_dir():
+            # Remove all files in the stream
+            for filepath in stream_path.glob("*.log"):
+                remove_log_file(filepath)
+            
+            # Remove the stream directory
+            import shutil
+            shutil.rmtree(stream_path)
+            
+            return {"deleted": True, "stream_id": stream_id}
+        else:
+            return {"deleted": False, "error": f"Stream '{stream_id}' not found"}
+    except Exception as e:
+        return {"deleted": False, "error": str(e)}
 
 
 # ==================== Parser Management ====================
@@ -420,21 +563,32 @@ def _calculate_group_timespan(events: List[Dict[str, Any]]) -> float:
 @app.post("/api/correlate", tags=["Correlation"])
 async def correlate_logs_post(
     window_ms: int = Query(500),
-    file_ids: List[str] = Query(None)
+    file_ids: List[str] = Query(None),
+    stream_id: str | None = Query(None),  # Correlate within a stream
 ):
     """
-    Correlate events from specific files.
+    Correlate events from files or streams.
     
     - window_ms: Time window for grouping
-    - file_ids: Optional list of file IDs to correlate (if not provided, uses all files)
+    - file_ids: Optional list of file IDs to correlate
+    - stream_id: Optional stream ID to correlate (files will be treated as unified stream)
     """
     log_dir = get_temp_log_dir()
     all_events = []
     
     # Determine which files to process
-    if file_ids:
+    if stream_id:
+        # Correlate all files within a specific stream
+        stream_path = log_dir / stream_id
+        if stream_path.exists() and stream_path.is_dir():
+            files_to_process = list(stream_path.glob("*.log"))
+        else:
+            return {"error": f"Stream '{stream_id}' not found"}
+    elif file_ids:
+        # Correlate specific files
         files_to_process = [f for f in log_dir.glob("*.log") if create_log_file_id() in file_ids or f.name.startswith(file_ids[0])]
     else:
+        # Correlate all files
         files_to_process = list(log_dir.glob("*.log"))
     
     for filepath in files_to_process:
@@ -447,10 +601,17 @@ async def correlate_logs_post(
                     
                     parsed = parser_registry.parse_line(line)
                     if parsed and parsed.get('timestamp'):
+                        # Add file info - if streaming, use stream name; otherwise use filename
+                        if stream_id and stream_path.exists():
+                            event_file = f"stream:{stream_id}/{filepath.name}"
+                        else:
+                            event_file = filepath.name
+                        
                         all_events.append({
                             **parsed,
-                            'file': filepath.name,
-                            'line_number': line_num
+                            'file': event_file,
+                            'line_number': line_num,
+                            'stream_id': stream_id  # Include for visualization
                         })
         except Exception:
             continue
@@ -465,11 +626,16 @@ async def correlate_logs_post(
         
         reference = min(group, key=lambda x: x.get('timestamp', ''))
         
+        # Determine stream name for display
+        stream_name = stream_id if stream_id else "mixed"
+        
         group_entry = {
             'group_id': f"corr_{i}",
             'reference_event': reference,
             'event_count': len(group),
             'time_span_ms': _calculate_group_timespan(group),
+            'stream_id': stream_id,
+            'stream_name': stream_name,
             'events': [
                 {
                     'timestamp': e['timestamp'],
@@ -477,7 +643,8 @@ async def correlate_logs_post(
                     'level': e['level'],
                     'message': e['message'][:200] + '...' if len(e['message']) > 200 else e['message'],
                     'file': e.get('file', 'unknown'),
-                    'line_number': e.get('line_number', 0)
+                    'line_number': e.get('line_number', 0),
+                    'stream_id': e.get('stream_id')
                 }
                 for e in group
             ]
@@ -488,6 +655,7 @@ async def correlate_logs_post(
         'total_groups': len(result),
         'window_ms': window_ms,
         'files_processed': len(files_to_process),
+        'stream_id': stream_id,
         'groups': result
     }
 

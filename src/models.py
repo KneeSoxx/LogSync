@@ -26,6 +26,15 @@ class LogFile(BaseModel):
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
 
+class LogStream(BaseModel):
+    """A unified stream of logs from multiple files."""
+    id: str = Field(..., description="Unique stream identifier")
+    name: str = Field(..., description="Stream name (user-defined)")
+    source_files: List[str] = Field(default_factory=list, description="List of file IDs in this stream")
+    combined_line_count: int = Field(0, description="Total lines across all files")
+    created_at: datetime = Field(default_factory=datetime.utcnow)
+
+
 class ParserDefinition(BaseModel):
     """Custom parser definition."""
     name: str = Field(..., description="Unique parser identifier")
@@ -46,3 +55,17 @@ class ParserRegistry(BaseModel):
         default=["json", "syslog", "apache", "python_log", "windows_event"],
         description="Priority order for auto-detection"
     )
+
+
+def get_registry():
+    """Get the global parser registry instance."""
+    return ParserRegistry(config_path=None)  # Lazy initialization
+
+
+def reset_registry(config_path: Optional[Path] = None):
+    """Reset and reload the parser registry."""
+    global parser_registry
+    if config_path:
+        parser_registry = ParserRegistry(config_path=config_path)
+    else:
+        parser_registry = ParserRegistry()
