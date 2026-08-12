@@ -328,3 +328,165 @@ if __name__ == "__main__":
     host = os.getenv("LOGSYNC_HOST", "0.0.0.0")
     
     uvicorn.run(app, host=host, port=port)
+
+
+# ==================== Correlation API ====================
+
+@app.get("/api/correlate", tags=["Correlation"])
+async def correlate_logs(
+    window_ms: int = Query(500, description="Time window in milliseconds for correlation")
+):
+    """
+    Find correlated events across all logs.
+    
+    Groups events that occur within the specified time window (default: 500ms).
+    
+    - window_ms: Time window for grouping related events
+    """
+    log_dir = get_temp_log_dir()
+    all_events = []
+    
+    for filepath in log_dir.glob("*.log"):
+        try:
+            with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+                for line_num, line in enumerate(f, 1):
+                    line = line.strip()
+                    if not line:
+                        continue
+                    
+                    parsed = parser_registry.parse_line(line)
+                    if parsed and parsed.get('timestamp'):
+                        all_events.append({
+                            **parsed,
+                            'file': filepath.name,
+                            'line_number': line_num
+                        })
+        except Exception:
+            continue
+    
+    # Correlate events
+    service = get_correlation_service(window_ms=window_ms)
+    groups = service.correlate_events(all_events)
+    
+    result = []
+    for i, group in enumerate(groups):
+        if not group:
+            continue
+        
+        # Find the earliest event in the group as reference
+        reference = min(group, key=lambda x: x.get('timestamp', ''))
+        
+        group_entry = {
+            'group_id': f"corr_{i}",
+            'reference_event': reference,
+            'event_count': len(group),
+            'time_span_ms': _calculate_group_timespan(group),
+            'events': [
+                {
+                    'timestamp': e['timestamp'],
+                    'source': e['source'],
+                    'level': e['level'],
+                    'message': e['message'][:200] + '...' if len(e['message']) > 200 else e['message'],
+                    'file': e.get('file', 'unknown'),
+                    'line_number': e.get('line_number', 0)
+                }
+                for e in group
+            ]
+        }
+        result.append(group_entry)
+    
+    return {
+        'total_groups': len(result),
+        'window_ms': window_ms,
+        'groups': result
+    }
+
+
+def _calculate_group_timespan(events: List[Dict[str, Any]]) -> float:
+    """Calculate time span in milliseconds for a group of events."""
+    if not events:
+        return 0
+    
+    timestamps = [datetime.fromisoformat(e['timestamp'].replace('Z', '+00:00')) if 'Z' in str(e['timestamp']) else datetime.fromisoformat(e['timestamp']) for e in events if e.get('timestamp')]
+    if not timestamps:
+        return 0
+    
+    min_time = min(timestamps)
+    max_time = max(timestamps)
+    
+    return (max_time - min_time).total_seconds() * 1000
+
+
+@app.post("/api/correlate", tags=["Correlation"])
+async def correlate_logs_post(
+    window_ms: int = Query(500),
+    file_ids: List[str] = Query(None)
+):
+    """
+    Correlate events from specific files.
+    
+    - window_ms: Time window for grouping
+    - file_ids: Optional list of file IDs to correlate (if not provided, uses all files)
+    """
+    log_dir = get_temp_log_dir()
+    all_events = []
+    
+    # Determine which files to process
+    if file_ids:
+        files_to_process = [f for f in log_dir.glob("*.log") if create_log_file_id() in file_ids or f.name.startswith(file_ids[0])]
+    else:
+        files_to_process = list(log_dir.glob("*.log"))
+    
+    for filepath in files_to_process:
+        try:
+            with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+                for line_num, line in enumerate(f, 1):
+                    line = line.strip()
+                    if not line:
+                        continue
+                    
+                    parsed = parser_registry.parse_line(line)
+                    if parsed and parsed.get('timestamp'):
+                        all_events.append({
+                            **parsed,
+                            'file': filepath.name,
+                            'line_number': line_num
+                        })
+        except Exception:
+            continue
+    
+    service = get_correlation_service(window_ms=window_ms)
+    groups = service.correlate_events(all_events)
+    
+    result = []
+    for i, group in enumerate(groups):
+        if not group:
+            continue
+        
+        reference = min(group, key=lambda x: x.get('timestamp', ''))
+        
+        group_entry = {
+            'group_id': f"corr_{i}",
+            'reference_event': reference,
+            'event_count': len(group),
+            'time_span_ms': _calculate_group_timespan(group),
+            'events': [
+                {
+                    'timestamp': e['timestamp'],
+                    'source': e['source'],
+                    'level': e['level'],
+                    'message': e['message'][:200] + '...' if len(e['message']) > 200 else e['message'],
+                    'file': e.get('file', 'unknown'),
+                    'line_number': e.get('line_number', 0)
+                }
+                for e in group
+            ]
+        }
+        result.append(group_entry)
+    
+    return {
+        'total_groups': len(result),
+        'window_ms': window_ms,
+        'files_processed': len(files_to_process),
+        'groups': result
+    }
