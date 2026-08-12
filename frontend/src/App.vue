@@ -5,6 +5,7 @@
       <nav class="nav-tabs">
         <button @click="view = 'upload'" :class="{ active: view === 'upload' }">Upload Logs</button>
         <button @click="view = 'viewer'" :class="{ active: view === 'viewer' && selectedFiles.length > 0 }">View Logs ({{ selectedFiles.length }})</button>
+        <button @click="view = 'timeline'" :class="{ active: view === 'timeline' }">Timeline</button>
       </nav>
     </header>
 
@@ -29,7 +30,7 @@
           </ul>
         </div>
 
-        <button @click="uploadFiles" :disabled="uploadQueue.length === 0 || uploading" class="btn-primary">
+        <button @click="uploadFiles" :disabled="uploading || uploadQueue.length === 0" class="btn-primary">
           {{ uploading ? 'Uploading...' : 'Upload Files' }}
         </button>
       </div>
@@ -48,7 +49,6 @@
           </div>
         </div>
 
-        <!-- File Tabs -->
         <div class="tabs-container">
           <button 
             v-for="(file, index) in selectedFiles" 
@@ -58,11 +58,9 @@
             class="tab-button"
           >
             {{ file.filename }}
-            <span class="line-count">{{ formatNumber(file.line_count) }} lines</span>
           </button>
         </div>
 
-        <!-- Log Content Panels -->
         <div class="panels-container">
           <div 
             v-for="(file, index) in selectedFiles" 
@@ -91,7 +89,6 @@
           </div>
         </div>
 
-        <!-- Search Panel -->
         <div class="search-panel">
           <h3>Search & Filter</h3>
           <div class="search-controls">
@@ -111,20 +108,29 @@
         </div>
       </div>
 
+      <!-- Timeline View -->
+      <div v-if="view === 'timeline'" class="timeline-section">
+        <correlation-view />
+      </div>
+
       <!-- Empty State -->
       <div v-else class="empty-state">
         <h2>Welcome to LogSync</h2>
-        <p>Select the "Upload Logs" tab to begin.</p>
+        <p>Select a tab to get started.</p>
       </div>
     </main>
   </div>
 </template>
 
 <script>
+import CorrelationView from './components/CorrelationView.vue'
 import axios from 'axios'
 
 export default {
   name: 'App',
+  components: {
+    CorrelationView
+  },
   data() {
     return {
       view: 'upload',
@@ -140,7 +146,6 @@ export default {
     }
   },
   mounted() {
-    // Check for saved state
     const savedState = localStorage.getItem('logsync_state')
     if (savedState) {
       try {
@@ -188,15 +193,8 @@ export default {
           headers: { 'Content-Type': 'multipart/form-data' }
         })
 
-        // Store uploaded files
         this.selectedFiles.push(...response.data.files)
-        
-        // Mark as complete
-        this.uploadQueue.forEach(item => {
-          item.status = 'complete'
-        })
-
-        // Save state
+        this.uploadQueue.forEach(item => { item.status = 'complete' })
         this.saveState()
 
       } catch (error) {
@@ -207,7 +205,6 @@ export default {
       } finally {
         this.uploading = false
         
-        // Clear queue after delay
         setTimeout(() => {
           this.uploadQueue = []
         }, 3000)
@@ -252,7 +249,6 @@ export default {
     },
 
     applyFilters() {
-      // Re-apply current search with new level filter
       if (this.searchQuery || this.selectedLogLevel) {
         this.performSearch()
       }
@@ -268,7 +264,6 @@ export default {
     syncScroll(activeFileIndex) {
       const panels = this.$refs.panels
       if (panels && activeFileIndex >= 0 && activeFileIndex < panels.length - 1) {
-        // Scroll other panels to match active one
         for (let i = 0; i < panels.length; i++) {
           if (i !== activeFileIndex) {
             panels[i].scrollTo(panels[activeFileIndex].scrollTop, panels[activeFileIndex].scrollLeft)
@@ -302,12 +297,6 @@ export default {
       const sizes = ['B', 'KB', 'MB', 'GB']
       const i = Math.floor(Math.log(bytes) / Math.log(k))
       return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i]
-    },
-
-    formatNumber(num) {
-      if (num >= 1000000) return (num / 1000000).toFixed(1) + 'M'
-      if (num >= 1000) return (num / 1000).toFixed(1) + 'K'
-      return num.toString()
     },
 
     saveState() {
@@ -372,7 +361,7 @@ export default {
   overflow: hidden;
 }
 
-.upload-section, .viewer-section, .empty-state {
+.upload-section, .viewer-section, .timeline-section, .empty-state {
   display: flex;
   flex-direction: column;
   gap: 1rem;
@@ -410,7 +399,6 @@ export default {
   font-size: 1rem;
   font-weight: bold;
   cursor: pointer;
-  transition: transform 0.2s, box-shadow 0.2s;
 }
 
 .btn-primary:hover:not(:disabled) {
@@ -422,29 +410,6 @@ export default {
   opacity: 0.5;
   cursor: not-allowed;
 }
-
-.queue-section {
-  background: #1e1e30;
-  padding: 1rem;
-  border-radius: 8px;
-}
-
-.queue-list {
-  list-style: none;
-  display: flex;
-  gap: 1rem;
-  margin-top: 1rem;
-}
-
-.queue-list li {
-  background: #2a2a40;
-  padding: 0.5rem 1rem;
-  border-radius: 4px;
-}
-
-.status-success { color: #4ade80; }
-.status-error { color: #f87171; }
-.status-pending { color: #60a5fa; }
 
 .viewer-header {
   display: flex;
@@ -477,7 +442,6 @@ export default {
   border-radius: 4px 4px 0 0;
   cursor: pointer;
   white-space: nowrap;
-  transition: all 0.2s;
 }
 
 .tab-button:hover {
@@ -492,7 +456,7 @@ export default {
 .panels-container {
   display: flex;
   gap: 1rem;
-  height: calc(100vh - 300px);
+  height: calc(100vh - 350px);
   min-height: 400px;
 }
 
@@ -511,7 +475,6 @@ export default {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  border-bottom: 1px solid #333;
 }
 
 .panel-title {
@@ -597,21 +560,5 @@ export default {
 .empty-state h2 {
   font-size: 2rem;
   margin-bottom: 0.5rem;
-}
-
-@media (max-width: 768px) {
-  .panels-container {
-    flex-direction: column;
-  }
-  
-  .log-line {
-    grid-template-columns: 1fr;
-    gap: 0.25rem;
-  }
-  
-  .log-line .timestamp,
-  .log-line .level {
-    display: none;
-  }
 }
 </style>
