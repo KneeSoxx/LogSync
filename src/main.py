@@ -490,3 +490,112 @@ async def correlate_logs_post(
         'files_processed': len(files_to_process),
         'groups': result
     }
+
+
+# ==================== Enhanced Search API ====================
+
+@app.get("/api/search", tags=["Search"])
+async def search_logs(
+    query: str = Query("", description="Keywords to search"),
+    start: Optional[str] = Query(None, description="Start timestamp (ISO format)"),
+    end: Optional[str] = Query(None, description="End timestamp (ISO format)"),
+    level: Optional[str] = Query(None, description="Filter by log level"),
+    sources: str = Query("", description="Comma-separated list of source names to filter")
+):
+    """
+    Search across all logs with multiple filters.
+    
+    - query: Keywords to search in message content (optional)
+    - start: Filter from this timestamp (ISO format, inclusive)
+    - end: Filter until this timestamp (ISO format, inclusive)  
+    - level: Filter by log level (e.g., "ERROR", "INFO")
+    - sources: Comma-separated list of source names to include
+    """
+    try:
+        services = search_service
+        
+        filters = {
+            'query': query if query else None,
+            'start_time': datetime.fromisoformat(start.replace('Z', '+00:00')) if start else None,
+            'end_time': datetime.fromisoformat(end.replace('Z', '+00:00')) if end else None,
+            'level': level,
+            'sources': [s.strip() for s in sources.split(',') if s.strip()] if sources else None
+        }
+        
+        results = services.search(**filters)
+        
+        return {
+            'total': len(results),
+            'results': results,
+            'stats': services.get_stats()
+        }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Search error: {str(e)}")
+
+
+@app.post("/api/search/export", tags=["Search"])
+async def export_search_results(
+    format: str = Query("json", description="Export format (json, csv)"),
+    start: Optional[str] = Query(None),
+    end: Optional[str] = Query(None),
+    level: Optional[str] = Query(None)
+):
+    """
+    Export search results to file format.
+    
+    - format: json or csv
+    - start/end/level: Same filters as /api/search
+    
+    Returns a download URL for the exported file.
+    """
+    try:
+        from src.storage.file_manager import get_temp_log_dir
+        
+        # Get results
+        services = search_service
+        filters = {
+            'start_time': datetime.fromisoformat(start.replace('Z', '+00:00')) if start else None,
+            'end_time': datetime.fromisoformat(end.replace('Z', '+00:00')) if end else None,
+            'level': level
+        }
+        
+        results = services.search(**filters)
+        
+        # Generate export filename
+        import uuid
+        export_id = str(uuid.uuid4())[:8]
+        export_path = get_temp_log_dir() / f"export_{export_id}.{format}"
+        
+        # Export to file
+        if format == 'csv':
+            with open(export_path, 'w', encoding='utf-8') as f:
+                # Write CSV header
+                f.write('timestamp,source,level,file,line_number,message\n')
+                
+                for entry in results[:1000]:  # Limit export size
+                    ts = entry.get('timestamp', '') or ''
+                    source = entry.get('source', '') or ''
+                    level = entry.get('level', '') or ''
+                    file_name = entry.get('file', '') or ''
+                    line_num = entry.get('line_number', 0) or 0
+                    message = entry.get('message', '')[:500] or ''
+                    
+                    # Escape CSV fields
+                    message = message.replace('"', '""')
+                    f.write(f'"{ts}","{source}","{level}","{file_name}","{line_num}","{message}"\n')
+        else:  # JSON
+            import json
+            with open(export_path, 'w', encoding='utf-8') as f:
+                json.dump({
+                    'total': len(results),
+                    'results': results[:1000]
+                }, f, indent=2)
+        
+        return {
+            'export_id': export_id,
+            'format': format,
+            'file_path': str(export_path),
+            'result_count': len(results)
+        }
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Export error: {str(e)}")
