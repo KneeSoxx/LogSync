@@ -11,3 +11,11 @@ venv/
 logs/*
 !logs/.gitkeep
 config/*.log
+
+# Node.js and frontend
+node_modules/
+frontend/node_modules/
+frontend/dist/
+*.lock
+npm-debug.log*
+yarn-error.log*
