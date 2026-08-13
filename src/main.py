@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from src.models import LogEntry, LogFile, LogStream, ParserDefinition, ParserRegistry, get_registry, reset_registry
 from src.storage.file_manager import store_log_file, get_log_file_info, remove_log_file, count_lines, get_temp_log_dir
+from src.processors.log_parser import BaseParser
 from src.processors.parser_registry import ParserRegistry as GlobalParserRegistry
 
 
