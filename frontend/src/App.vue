@@ -28,9 +28,9 @@
           <input v-model="streamName" type="text" placeholder="Enter stream name (e.g., production-app)" />
         </div>
         
-        <div class="drop-zone" @dragover.prevent @drop="handleDrop">
+        <div class="drop-zone" @dragover.prevent @drop="handleDrop" @click="$refs.fileInput.click()">
           <p class="drop-text">Drag and drop log files here, or click to select</p>
-          <input type="file" multiple accept=".log,.txt" @change="handleFileSelect" class="file-input" />
+          <input type="file" multiple accept=".log,.txt" @change="handleFileSelect" class="file-input" ref="fileInput" />
         </div>
         
         <div v-if="uploadQueue.length > 0" class="queue-section">
@@ -102,9 +102,9 @@
           </label>
         </div>
 
-        <div class="drop-zone correlate-drop" @dragover.prevent @drop="handleStreamDrop">
+        <div class="drop-zone correlate-drop" @dragover.prevent @drop="handleStreamDrop" @click="$refs.correlateFileInput.click()">
           <p class="drop-text">Or drag files here to create a new stream for correlation</p>
-          <input type="file" multiple accept=".log,.txt" @change="handleStreamFileSelect" class="file-input" />
+          <input type="file" multiple accept=".log,.txt" @change="handleStreamFileSelect" class="file-input" ref="correlateFileInput" />
         </div>
 
         <button @click="performCorrelation" :disabled="correlating || !hasCorrelatableData" class="btn-primary">
@@ -210,6 +210,9 @@ export default {
         f.name.endsWith('.log') || f.name.endsWith('.txt')
       )
       this.addFiles(files)
+      
+      // Reset the file input so the same files can be selected again
+      event.target.value = ''
     },
 
     handleStreamFileSelect(event) {
