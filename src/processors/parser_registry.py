@@ -137,7 +137,7 @@ class ParserRegistry:
         return self._parsers.get(name)
     
     def get_all_parsers(self) -> Dict[str, BaseParser]:
-        """Get all registered parsers."""
+        """Get all registered parser instances (not config placeholders)."""
         return {name: parser for name, parser in self._parsers.items() 
                 if isinstance(parser, BaseParser)}
     
