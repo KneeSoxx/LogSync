@@ -587,7 +587,12 @@ async def correlate_logs_post(
             return {"error": f"Stream '{stream_id}' not found"}
     elif file_ids:
         # Correlate specific files
-        files_to_process = [f for f in log_dir.glob("*.log") if create_log_file_id() in file_ids or f.name.startswith(file_ids[0])]
+        files_to_process = []
+        for f in log_dir.glob("*.log"):
+            filename = f.name
+            file_id = filename.replace('.log', '')
+            if file_id in file_ids or (len(file_id) >= 8 and file_id.startswith(file_ids[0])):
+                files_to_process.append(f)
     else:
         # Correlate all files
         files_to_process = list(log_dir.glob("*.log"))
