@@ -1,5 +1,7 @@
 """Pydantic models for LogSync."""
+import os
 from datetime import datetime
+from pathlib import Path
 from typing import Optional, Dict, Any, List
 from pydantic import BaseModel, Field
 
