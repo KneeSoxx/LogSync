@@ -3,7 +3,7 @@ import os
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import List, Optional
+from typing import Dict, List, Optional
 from fastapi import FastAPI, UploadFile, File, HTTPException, Query, Request, Form
 from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
