@@ -18,50 +18,47 @@ A powerful tool for debugging multiple log files from different applications sim
 - Node.js 18+ (for building frontend)
 - npm or yarn
 
-### Development Setup (Recommended)
+### Cross-Platform Startup (Choose one)
 
+**Linux/macOS:**
 ```bash
-# Install Python dependencies
-pip install -r requirements.txt
-
-# Install frontend dependencies
-cd frontend
-npm install
-
-# Start backend server
-python run.py 8000
-
-# Open browser at http://localhost:8000
-
-# To develop frontend with hot reload, start in another terminal:
-cd frontend
-npm run dev
+./run.sh 8000
 ```
 
-### Production Setup (Static Files)
-
-```bash
-# Install Python dependencies
-pip install -r requirements.txt
-
-# Build optimized frontend
-cd frontend
-npm run build
-
-# Run the server (it will serve built static files from frontend/dist/)
-python run.py 8000
-
-# Access via browser at http://localhost:8000
+**Windows Command Prompt:**
+```cmd
+run.bat 8000
 ```
 
-### Minimal Setup (No Node.js)
+**Windows PowerShell:**
+```powershell
+.\venv\Scripts\activate
+python -m uvicorn src.main:app --host 0.0.0.0 --port 8000
+```
 
-If you don't have Node.js, you can still use the API directly:
-
+**Direct Python command (all platforms):**
 ```bash
-pip install -r requirements.txt
-python run.py 8000
+uvicorn src.main:app --host 0.0.0.0 --port 8000
+```
 # Access Swagger UI at http://localhost:8000/docs
+```
+
+### Cross-Platform Startup Scripts
+
+**Linux/macOS:**
+```bash
+./run.sh 8000
+```
+
+**Windows (Command Prompt):**
+```cmd
+run.bat 8000
+```
+
+**Windows (PowerShell):**
+```powershell
+.\venv\Scripts\activate
+python -m uvicorn src.main:app --host 0.0.0.0 --port 8000
 ```
 
 ### Usage
